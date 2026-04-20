@@ -367,14 +367,14 @@ BGM建议：
 1. 本次即梦提示词（完整中文，可直接复制到即梦官网测试）
 2. 字数统计结果
 3. 预计积分消耗
-4. 参考图（主图路径）
+4. 参考图方案（主图必选 + 是否追加商详图 + 选择理由）
 5. 本次“创意保真检查”结果（钩子/反转/落版是否保留）
 
 用户回复"可以/好/确认"后，才执行 `dreamina image2video` 命令。
 
 ### 6.2 调用即梦CLI
 
-**关键：使用主图作为全帧参考，一次提交生成完整视频（不分镜提交）。**
+**关键：主图必须作为“全能参考”基底；在分析主图、商详图与运镜脚本后，决定是否追加商详图作为参考图。一次提交生成完整视频（不分镜提交）。**
 
 ```bash
 ~/.local/bin/dreamina image2video \
@@ -387,13 +387,43 @@ BGM建议：
 ```
 
 **注意事项：**
+- 图片参考方式统一使用“全能参考”（不要再使用全帧参考/局部参考）
+- 主图必须入选参考图；商详图是否入选需基于“镜头动作是否需要补充细节/材质/功能展示”判断，不做固定限制
+- 在提交前，先完成“主图+商详图内容分析”，再结合最终运镜脚本确定参考图清单
 - `--duration` 支持 4-15 秒（seedance2.0fast）
 - 如果总时长超过15秒，分多次提交，或截取核心镜头
 - 如果 `--duration` 报错"should >=4 && <=15"，改为合法值
-- `--poll 60` 表示提交后等待最多60秒查结果，超时则返回排队状态，任务继续在后台排队
-- 任务提交成功后会返回 `submit_id`，用于后续查询
+- `--poll 60` 仅用于“快速拿到首个状态”，不用于长时间持续等待
+- 任务提交成功后会返回 `submit_id`，必须写入会话目录的 `dreamina_task.json` 以便后续人工下载
 
-### 6.3 查询与下载
+### 6.3 长队列处理与任务记录（替代持续轮询）
+
+高峰期视频生成可能超过2小时，禁止长时间自动轮询。
+
+**执行策略（严格按顺序）：**
+1. 提交 `image2video` 后，最多进行一次短轮询（`--poll 60`）获取初始状态。
+2. 若状态为排队中/处理中，且提示等待时间较长（例如预计超过30分钟或明显处于高峰队列），立即停止自动等待。
+3. 将任务信息写入 `dreamina_task.json`，至少包含：
+   - `submit_id`
+   - `status`（queueing/processing/success/failed）
+   - `created_at`
+   - `last_checked_at`
+   - `note`（如“高峰期长队列，改为人工触发下载”）
+4. 向用户明确告知：任务已成功提交并记录，可稍后人工触发查询/下载。
+5. 本轮流程到此结束，不再循环 `query_result`。
+
+`dreamina_task.json` 示例：
+```json
+{
+  "submit_id": "xxxxxxxx",
+  "status": "queueing",
+  "created_at": "2026-04-20T10:00:00+08:00",
+  "last_checked_at": "2026-04-20T10:01:00+08:00",
+  "note": "高峰期长队列，改为人工触发下载"
+}
+```
+
+### 6.4 人工触发查询与下载
 
 ```bash
 # 查询状态
@@ -403,13 +433,29 @@ BGM建议：
 ~/.local/bin/dreamina download --submit_id <submit_id> --output_path "<run目录/full_video.mp4>"
 ```
 
-### 6.4 归档
+推荐使用一键脚本（读取并回写 `dreamina_task.json`）：
+```bash
+python3 ~/.qclaw/skills/fresh-video-planning/scripts/manual_download.py \
+  --run-dir "<run目录路径>"
+```
+
+只查询不下载：
+```bash
+python3 ~/.qclaw/skills/fresh-video-planning/scripts/manual_download.py \
+  --run-dir "<run目录路径>" \
+  --query-only
+```
+
+人工触发下载成功后，需要同步更新 `dreamina_task.json`（状态、最后检查时间、下载路径）。
+
+### 6.5 归档
 
 ```
 ~/freshVedioPlanning/{product_name}_{sku}/run_NNN/
 ├── 01_analysis.md
 ├── 02_creative_structure.md
 ├── 03_scripts.md
+├── dreamina_task.json   # 即梦任务记录（submit_id/状态/人工下载备注）
 ├── main_image.jpg
 └── full_video.mp4        # 即梦生成的完整视频
 ```
@@ -428,6 +474,7 @@ BGM建议：
 | 即梦提示词字数超1900字 | 继续精简每镜描述，删除情绪标注和说明性文字 |
 | 即梦CLI不可用 | 提示用户手动在官网生成，提供提示词，询问文件路径 |
 | 即梦CLI执行失败 | 记录错误信息，请用户确认CLI状态，尝试回退手动模式 |
+| 即梦返回长队列/预计等待过长 | 立即停止自动轮询，写入 `dreamina_task.json`，通知用户后续人工触发下载 |
 | duration报错 | 调整 `--duration` 在 4-15 秒合法范围内重试 |
 | 视频文件未找到 | 询问用户视频文件位置，尝试常见下载目录 |
 | 目录已满/写入失败 | 告知用户，检查目录权限 |
